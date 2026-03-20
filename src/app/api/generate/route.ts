@@ -123,9 +123,12 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(data, { status: 200 })
   } catch (err) {
-    console.error('Generate route error:', err)
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    const errorStack = err instanceof Error ? err.stack : ''
+    console.error('Generate route error:', errorMsg)
+    console.error('Stack:', errorStack)
     return NextResponse.json(
-      { error: 'An unexpected error occurred.' },
+      { error: 'An unexpected error occurred.', detail: errorMsg },
       { status: 500 }
     )
   }
