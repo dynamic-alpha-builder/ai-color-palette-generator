@@ -1,17 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
-import type { ContentBlock } from '@anthropic-ai/sdk/resources/messages/messages'
 import { supabase } from '@/lib/supabase'
 import { Color } from '@/lib/types'
 
 // Allow up to 60 seconds for this function on Vercel
 export const maxDuration = 60
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-  // 50 second timeout to stay within Vercel's 60s limit
-  timeout: 50000,
-})
 
 const SYSTEM_PROMPT = `You are a color palette expert. The user will give you a mood or concept. Respond with ONLY a JSON array of exactly 5 color objects. No markdown, no explanation, no code fences — just the raw JSON array. Each object must have exactly these keys: "name" (a creative color name), "hex" (a valid 6-digit hex code starting with #), "description" (one sentence describing the color's feel). Make the colors harmonious and evocative of the prompt.`
 
@@ -57,28 +49,57 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Use create() instead of stream() for more reliable serverless execution
-    const message = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: trimmedPrompt,
-        },
-      ],
+    const apiKey = process.env.ANTHROPIC_API_KEY
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'API key not configured.' },
+        { status: 500 }
+      )
+    }
+
+    // Use native fetch directly for reliable Vercel serverless execution
+    const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-6',
+        max_tokens: 1024,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: trimmedPrompt,
+          },
+        ],
+      }),
     })
 
-    const textBlock = message.content.find((block: ContentBlock) => block.type === 'text')
-    if (!textBlock || textBlock.type !== 'text') {
+    if (!anthropicResponse.ok) {
+      const errBody = await anthropicResponse.text()
+      console.error('Anthropic API error:', anthropicResponse.status, errBody)
+      return NextResponse.json(
+        { error: 'AI service error.', detail: errBody.substring(0, 200) },
+        { status: 500 }
+      )
+    }
+
+    const anthropicData = await anthropicResponse.json()
+    const textBlock = anthropicData.content?.find(
+      (block: { type: string }) => block.type === 'text'
+    )
+
+    if (!textBlock) {
       return NextResponse.json(
         { error: 'No text response received from AI.' },
         { status: 500 }
       )
     }
 
-    const rawText = textBlock.text.trim()
+    const rawText = (textBlock as { type: string; text: string }).text.trim()
 
     let colors: unknown
     try {
@@ -126,9 +147,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(data, { status: 200 })
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
-    const errorStack = err instanceof Error ? err.stack : ''
     console.error('Generate route error:', errorMsg)
-    console.error('Stack:', errorStack)
     return NextResponse.json(
       { error: 'An unexpected error occurred.', detail: errorMsg },
       { status: 500 }
