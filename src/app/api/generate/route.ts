@@ -4,8 +4,13 @@ import type { ContentBlock } from '@anthropic-ai/sdk/resources/messages/messages
 import { supabase } from '@/lib/supabase'
 import { Color } from '@/lib/types'
 
+// Allow up to 60 seconds for this function on Vercel
+export const maxDuration = 60
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
+  // 50 second timeout to stay within Vercel's 60s limit
+  timeout: 50000,
 })
 
 const SYSTEM_PROMPT = `You are a color palette expert. The user will give you a mood or concept. Respond with ONLY a JSON array of exactly 5 color objects. No markdown, no explanation, no code fences — just the raw JSON array. Each object must have exactly these keys: "name" (a creative color name), "hex" (a valid 6-digit hex code starting with #), "description" (one sentence describing the color's feel). Make the colors harmonious and evocative of the prompt.`
@@ -52,11 +57,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const stream = anthropic.messages.stream({
+    // Use create() instead of stream() for more reliable serverless execution
+    const message = await anthropic.messages.create({
       model: 'claude-opus-4-6',
-      max_tokens: 16000,
-      // @ts-expect-error adaptive thinking not yet in SDK types
-      thinking: { type: 'adaptive' },
+      max_tokens: 1024,
       system: SYSTEM_PROMPT,
       messages: [
         {
@@ -65,8 +69,6 @@ export async function POST(request: NextRequest) {
         },
       ],
     })
-
-    const message = await stream.finalMessage()
 
     const textBlock = message.content.find((block: ContentBlock) => block.type === 'text')
     if (!textBlock || textBlock.type !== 'text') {
@@ -83,7 +85,7 @@ export async function POST(request: NextRequest) {
       colors = JSON.parse(rawText)
     } catch {
       return NextResponse.json(
-        { error: 'Failed to parse color palette from AI response.' },
+        { error: 'Failed to parse color palette from AI response.', detail: rawText.substring(0, 200) },
         { status: 500 }
       )
     }
